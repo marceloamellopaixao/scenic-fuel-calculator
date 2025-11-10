@@ -1,167 +1,180 @@
 "use client";
-
-// Calculadora de Combustível Avançada
-// Tech: Next.js (React), TypeScript, Tailwind CSS, Recharts, Lucide-React
-// Features:
-// - Suporte a múltiplos combustíveis (Etanol, Gasolina, Diesel, GNV)
-// - Configurações (Preço, Consumo, Capacidade do Tanque) salvas por combustível
-// - Cálculo R$ ↔ Litros em tempo real
-// - Histórico local (localStorage) filtrado por combustível
-// - Gráfico de consumo (km/L)
-// - Simulações de custo (Viagem e Diário)
-// - UI moderna com ícones, responsiva.
-
-import React, { useEffect, useMemo, useState } from 'react';
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { 
-  Fuel, 
-  DollarSign, 
-  Gauge, 
-  Calendar, 
-  Route, 
-  History, 
-  BarChart2, 
-  Settings, 
-  Plus, 
-  Trash2, 
-  Upload, 
-  Download, 
-  FileJson, 
-  ChevronDown, 
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ComposedChart,
+  Bar
+} from 'recharts';
+import {
+  Fuel,
+  Gauge,
+  DollarSign,
+  Calendar,
   Droplet,
-  AlertTriangle, // Ícone para o aviso do tanque
-  Container // Ícone para a capacidade do tanque
+  Route,
+  History,
+  Download,
+  Upload,
+  Trash2,
+  ChevronDown,
+  Settings,
+  Container,
+  X,
+  Edit,
+  TrendingUp,
+  Calculator,
+  Wallet,
+  Clock,
+  Wrench,
+  Info
 } from 'lucide-react';
 
 // --- Tipos de Dados ---
-
 type FuelType = 'Etanol' | 'Gasolina' | 'Diesel' | 'GNV';
 
 type Refuel = {
   id: string;
   date: string; // ISO
-  fuelType: FuelType; // Qual combustível foi usado
+  fuelType: FuelType;
   amountBRL: number; // R$
-  liters: number; // L (ou m³ para GNV)
-  km: number; // km rodados nesse tanque (ou viagem)
-  pricePerLiter: number; // R$/L (calculado no momento do registro)
+  liters: number; // L ou m³
+  km: number; // km rodados nesse tanque
+  pricePerLiter: number; // R$/L ou R$/m³
 }
 
 type FuelSettings = {
-  price: number; // R$/L
-  consumption: number; // km/L
+  price: number;
+  consumption: number; // km/L ou km/m³
   tankSize: number; // L ou m³
 }
 
-type AllSettings = {
-  [key in FuelType]: FuelSettings;
-}
+type AllSettings = Record<FuelType, FuelSettings>;
 
-// --- Constantes ---
+const STORAGE_KEY_HISTORY = 'fuel_history_v2';
+const STORAGE_KEY_SETTINGS = 'fuel_settings_v2';
 
-const STORAGE_KEY_HISTORY = 'fuel_calculator_history_v2';
-const STORAGE_KEY_SETTINGS = 'fuel_calculator_settings_v2';
-
+// --- Configurações Padrão ---
 const DEFAULT_SETTINGS: AllSettings = {
-  'Etanol': { price: 4.08, consumption: 7.5, tankSize: 50 },
-  'Gasolina': { price: 5.89, consumption: 10.5, tankSize: 50 },
-  'Diesel': { price: 6.10, consumption: 12.0, tankSize: 50 },
-  'GNV': { price: 4.99, consumption: 13.0, tankSize: 15 }, // GNV em R$/m³ e km/m³
+  'Etanol': { price: 4.09, consumption: 7.5, tankSize: 50 },
+  'Gasolina': { price: 5.89, consumption: 11.0, tankSize: 50 },
+  'Diesel': { price: 6.09, consumption: 14.0, tankSize: 70 },
+  'GNV': { price: 4.99, consumption: 13.0, tankSize: 15 },
 };
 
-// --- Funções Helper (Utilitários) ---
+// --- Funções Utilitárias ---
 
 /** Gera um ID único simples */
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+  return Math.random().toString(36).slice(2, 9);
 }
 
-/** Hook para gerenciar estado no localStorage */
+/** Hook para salvar e ler dados do localStorage (CORRIGIDO PARA HIDRATAÇÃO) */
 function useLocalStorage<T>(key: string, initial: T) {
-  const [state, setState] = useState<T>(() => {
-    // Roda apenas no cliente
-    if (typeof window === 'undefined') {
-      return initial;
-    }
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) as T : initial;
-    } catch (e) {
-      console.error(`Erro ao ler do localStorage (key: ${key}):`, e);
-      return initial;
-    }
-  });
+  // 1. Inicia o estado SEMPRE com o valor inicial.
+  // Isso garante que o servidor e o primeiro render do cliente sejam idênticos.
+  const [state, setState] = useState<T>(initial);
 
+  // 2. Após a montagem (só no cliente), lê o valor real do localStorage.
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(key, JSON.stringify(state));
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          // Define o estado com o valor salvo, disparando um segundo render.
+          setState(JSON.parse(raw) as T);
+        }
       } catch (e) {
-        console.error(`Erro ao salvar no localStorage (key: ${key}):`, e);
+        console.error(`Erro ao ler do localStorage (${key}):`, e);
       }
     }
-  }, [key, state]);
+    // O array de dependências vazio [] garante que isso só rode UMA VEZ no cliente.
+  }, [key]);
+
+  // 3. Salva qualquer mudança de estado de volta no localStorage.
+  useEffect(() => {
+    // Não salva o valor inicial no primeiro render, espera a primeira mudança real.
+    if (JSON.stringify(state) !== JSON.stringify(initial)) {
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(key, JSON.stringify(state));
+        } catch (e) {
+          console.error(`Erro ao salvar no localStorage (${key}):`, e);
+        }
+      }
+    }
+  }, [key, state, initial]);
 
   return [state, setState] as const;
 }
 
 /** Converte string (com vírgula ou ponto) para número */
-function numeric(s: string | number): number {
+const numeric = (s: string | number): number => {
   if (typeof s === 'number') return s;
-  if (typeof s !== 'string') return 0;
-  const n = parseFloat(s.replace(',', '.'));
+  const n = parseFloat(String(s).replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
-}
+};
 
-/** Formata número para string com vírgula (padrão BR) */
-function fmtNum(num: number, digits = 2): string {
+/** Formata número para string com vírgula (ex: 10,50) */
+const fmtNum = (num: number, digits = 2): string => {
+  // Adiciona uma guarda para valores nulos ou indefinidos
   if (typeof num !== 'number' || !Number.isFinite(num)) {
-    return '0,00';
+    num = 0; // Define um padrão seguro para evitar o crash
   }
   return num.toFixed(digits).replace('.', ',');
-}
+};
 
-/** Formata número para R$ */
-function fmtBRL(num: number): string {
+/** Formata número para Reais (ex: R$ 10,50) */
+const fmtBRL = (num: number): string => {
   return `R$ ${fmtNum(num, 2)}`;
-}
+};
 
 
-// --- Componentes de UI Internos ---
-// (Movidos para fora para evitar re-criação e perda de foco)
+// --- Componentes de UI Internos (Definidos Fora para evitar re-render) ---
 
 /** Um input de formulário estilizado com ícone */
 const InputGroup = React.memo((
-  { label, icon, value, onChange, onBlur, placeholder, type = 'text', unit }:
-  { 
-    label: string, 
-    icon: React.ReactElement<any>, // Corrigido para aceitar 'any' props 
-    value: string, 
-    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, 
-    onBlur?: () => void, // onBlur é opcional
-    placeholder?: string, 
-    type?: string, 
-    unit?: string 
+  {
+    label,
+    icon,
+    value,
+    onChange,
+    onBlur,
+    placeholder,
+    unit
+  }: {
+    label: string,
+    icon: React.ReactElement,
+    value: string,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void,
+    onBlur?: () => void,
+    placeholder?: string,
+    unit?: string
   }
 ) => (
   <div>
-    <label className="block text-sm font-medium text-gray-700">{label}</label>
-    <div className="relative mt-1 rounded-lg shadow-sm">
-      <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-        {React.cloneElement(icon, { className: "h-5 w-5 text-gray-400" })}
+    <label className="block text-sm font-medium text-slate-700">{label}</label>
+    <div className="relative mt-1.5 rounded-xl shadow-sm">
+      <div className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+        {React.cloneElement(icon as React.ReactElement<any>, { className: "h-5 w-5 text-slate-400" })}
       </div>
       <input
-        type="text" // Sempre 'text' para permitir vírgula
-        inputMode="decimal" // Sempre 'decimal' para teclado numérico no celular
+        type="text"
+        inputMode="decimal"
         value={value}
         onChange={onChange}
-        onBlur={onBlur} // Aplicando onBlur
+        onBlur={onBlur}
         placeholder={placeholder}
-        className="block w-full py-3 pl-10 pr-12 transition-colors border-gray-200 bg-gray-50 rounded-xl focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 sm:text-sm"
+        className="w-full py-3 pr-4 transition-all border-gray-200 pl-11 bg-gray-50 rounded-xl focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 sm:text-sm"
       />
       {unit && (
-        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-          <span className="text-gray-500 sm:text-sm">{unit}</span>
+        <div className="absolute inset-y-0 right-0 flex items-center pr-3.5 pointer-events-none">
+          <span className="text-slate-500 sm:text-sm">{unit}</span>
         </div>
       )}
     </div>
@@ -169,48 +182,79 @@ const InputGroup = React.memo((
 ));
 InputGroup.displayName = 'InputGroup';
 
-
 /** Um cartão de estatística para o resumo */
 const StatCard = React.memo((
   { title, value, icon, unit }:
-  { 
-    title: string, 
-    value: string, 
-    icon: React.ReactElement<any>, // Corrigido para aceitar 'any' props
-    unit?: string 
-  }
+    { title: string, value: string, icon: React.ReactElement, unit?: string }
 ) => (
-  <div className="flex items-start p-4 space-x-4 bg-white border border-gray-100 shadow-sm rounded-2xl">
-    <div className="flex-shrink-0 p-3 bg-gradient-to-br from-indigo-100 to-purple-100 rounded-xl">
-      {React.cloneElement(icon, { className: "h-6 w-6 text-indigo-600" })}
+  <div className="relative p-4 overflow-hidden bg-white border border-gray-100 shadow-lg rounded-3xl">
+    <div
+      className="absolute top-0 right-0 p-3 m-2 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl opacity-60"
+    >
+      {React.cloneElement(icon as React.ReactElement<any>, { className: "h-6 w-6 text-indigo-600" })}
     </div>
-    <div>
-      <p className="text-sm font-medium text-gray-500">{title}</p>
-      <p className="text-xl font-semibold text-gray-900">
-        {value} {unit && <span className="text-base font-normal text-gray-500">{unit}</span>}
+    <div className="relative z-10">
+      <p className="text-sm font-medium text-slate-500">{title}</p>
+      <p className="text-2xl font-bold text-slate-900">
+        {value} {unit && <span className="text-base font-normal text-slate-500">{unit}</span>}
       </p>
     </div>
   </div>
 ));
 StatCard.displayName = 'StatCard';
 
-/** Abas de seleção de combustível */
-const FuelTabs = React.memo((
+/** Abas de seleção de combustível (Responsivo) */
+const ResponsiveFuelSelector = React.memo((
   { current, onChange }:
-  { current: FuelType, onChange: (fuel: FuelType) => void }
+    { current: FuelType, onChange: (fuel: FuelType) => void }
 ) => {
   const fuelTypes: FuelType[] = ['Etanol', 'Gasolina', 'Diesel', 'GNV'];
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
     <div className="mb-6">
-      <div className="block">
-        <nav className="flex flex-wrap p-1 bg-gray-100 rounded-xl" aria-label="Tabs">
+      {/* --- Versão Mobile (Dropdown) --- */}
+      <div className="relative md:hidden">
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-left text-gray-700 bg-white border border-gray-200 shadow-sm rounded-xl hover:bg-gray-50"
+        >
+          <span>Combustível: <span className="font-semibold text-indigo-600">{current}</span></span>
+          <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${isOpen ? 'transform rotate-180' : ''}`} />
+        </button>
+        {isOpen && (
+          <div className="absolute z-10 w-full mt-1 bg-white border border-gray-100 shadow-lg rounded-xl">
+            <div className="p-1">
+              {fuelTypes.map((fuel) => (
+                <button
+                  key={fuel}
+                  onClick={() => {
+                    onChange(fuel);
+                    setIsOpen(false);
+                  }}
+                  className={`
+                    ${current === fuel ? 'bg-indigo-50 text-indigo-600' : 'text-gray-700'}
+                    block w-full text-left px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-100
+                  `}
+                >
+                  {fuel}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* --- Versão Desktop (Pílulas) --- */}
+      <div className="hidden md:block">
+        <nav className="flex flex-wrap p-1.5 bg-gray-100 rounded-2xl" aria-label="Tabs">
           {fuelTypes.map((fuel) => (
             <button
               key={fuel}
               onClick={() => onChange(fuel)}
               className={`
                 ${current === fuel
-                  ? 'bg-white text-indigo-600 rounded-lg shadow-sm'
+                  ? 'bg-white text-indigo-600 rounded-xl shadow-md'
                   : 'border-transparent text-gray-500 hover:text-gray-700'}
                 w-1/2 md:w-auto flex-grow md:flex-grow-0 whitespace-nowrap py-3 px-4 font-medium text-sm text-center transition-all m-0.5
               `}
@@ -223,103 +267,197 @@ const FuelTabs = React.memo((
     </div>
   );
 });
-FuelTabs.displayName = 'FuelTabs';
+ResponsiveFuelSelector.displayName = 'ResponsiveFuelSelector';
+
+/** Modal de Configurações */
+const SettingsModal = React.memo((
+  {
+    isOpen,
+    onClose,
+    currentFuel,
+    unitL,
+    unitKmpl,
+    priceInput,
+    setPriceInput,
+    consumptionInput,
+    setConsumptionInput,
+    tankSizeInput,
+    setTankSizeInput,
+    handleSettingsChange
+  }: {
+    isOpen: boolean;
+    onClose: () => void;
+    currentFuel: FuelType;
+    unitL: string;
+    unitKmpl: string;
+    priceInput: string;
+    setPriceInput: (val: string) => void;
+    consumptionInput: string;
+    setConsumptionInput: (val: string) => void;
+    tankSizeInput: string;
+    setTankSizeInput: (val: string) => void;
+    handleSettingsChange: (field: 'price' | 'consumption' | 'tankSize', value: string) => void;
+  }
+) => {
+  if (!isOpen) return null;
+
+  return (
+    // Backdrop
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-300 bg-black bg-opacity-60 backdrop-blur-sm">
+      {/* Painel do Modal */}
+      <div className="relative w-full max-w-md p-6 transition-all duration-300 bg-white shadow-2xl rounded-3xl">
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-gray-200">
+          <h2 className="flex items-center text-xl font-semibold text-gray-900">
+            <Wrench className="w-5 h-5 mr-2 text-indigo-600" />
+            Configurações ({currentFuel})
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-1 text-gray-400 transition-colors rounded-full hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Conteúdo (Formulário) */}
+        <div className="mt-6 space-y-4">
+          <InputGroup
+            label={`Preço por ${unitL} (R$)`}
+            icon={<DollarSign />}
+            value={priceInput}
+            onChange={(e) => setPriceInput(e.target.value)}
+            onBlur={() => handleSettingsChange('price', priceInput)}
+          />
+          <InputGroup
+            label={`Consumo Médio (${unitKmpl})`}
+            icon={<Gauge />}
+            value={consumptionInput}
+            onChange={(e) => setConsumptionInput(e.target.value)}
+            onBlur={() => handleSettingsChange('consumption', consumptionInput)}
+          />
+          <InputGroup
+            label={`Capacidade do Tanque (${unitL})`}
+            icon={<Container />}
+            value={tankSizeInput}
+            onChange={(e) => setTankSizeInput(e.target.value)}
+            onBlur={() => handleSettingsChange('tankSize', tankSizeInput)}
+          />
+        </div>
+
+        {/* Footer */}
+        <div className="pt-4 mt-8 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            className="w-full py-3 font-semibold text-white transition-all bg-indigo-600 shadow-lg rounded-xl hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2"
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+SettingsModal.displayName = 'SettingsModal';
 
 
 // --- Componente Principal da Página ---
 
 export default function FuelCalculatorPage() {
 
-  // --- Estados (State) ---
-
-  // Estado principal: qual combustível está selecionado
+  // --- Estados Principais ---
   const [currentFuel, setCurrentFuel] = useState<FuelType>('Etanol');
 
-  // Estados dos formulários (strings, para digitação livre)
-  const [amountBRL, setAmountBRL] = useState('');
-  const [litersInput, setLitersInput] = useState('');
-  const [kmRodadosInput, setKmRodadosInput] = useState('');
-  const [lastChanged, setLastChanged] = useState<'brl' | 'liters' | null>(null);
+  // Estados dos inputs do formulário principal
+  const [amountBRLInput, setAmountBRLInput] = useState<string>('');
+  const [litersInput, setLitersInput] = useState<string>('');
+  const [kmRodadosInput, setKmRodadosInput] = useState<string>('');
 
-  // Estados das simulações
-  const [simulacaoDistanciaInput, setSimulacaoDistanciaInput] = useState('');
-  const [simulacaoCommuteInput, setSimulacaoCommuteInput] = useState('');
+  // Estados dos inputs de Simulação
+  const [simulacaoDistanciaInput, setSimulacaoDistanciaInput] = useState<string>('');
+  const [simulacaoCommuteInput, setSimulacaoCommuteInput] = useState<string>('24'); // Default 24km
 
   // Histórico (vem do localStorage)
   const [history, setHistory] = useLocalStorage<Refuel[]>(STORAGE_KEY_HISTORY, []);
-  
+
   // Configurações (vem do localStorage)
   const [allSettings, setAllSettings] = useLocalStorage<AllSettings>(STORAGE_KEY_SETTINGS, DEFAULT_SETTINGS);
 
+  // Estado para o modal de Configurações
+  const [isSettingsModalOpen, setSettingsModalOpen] = useState(false);
+
   // Estados dos inputs de Configuração (para digitação livre sem perda de foco)
   const [priceInput, setPriceInput] = useState(fmtNum(allSettings[currentFuel].price));
-  const [consumptionInput, setConsumptionInput] = useState(fmtNum(allSettings[currentFuel].consumption));
-  const [tankSizeInput, setTankSizeInput] = useState(fmtNum(allSettings[currentFuel].tankSize, 1)); // 1 casa decimal para tanque
+  const [consumptionInput, setConsumptionInput] = useState(fmtNum(allSettings[currentFuel].consumption, 1));
+  const [tankSizeInput, setTankSizeInput] = useState(fmtNum(allSettings[currentFuel].tankSize, 1));
 
   // --- Memos (Cálculos Derivados) ---
 
-  // Retorna as configurações atuais, garantindo que valores padrão existam
+  /** Configurações atuais baseadas no combustível selecionado */
   const currentSettings = useMemo(() => {
-    // Merge: Garante que se o localStorage tiver settings antigas (sem tankSize),
-    // o valor padrão (DEFAULT_SETTINGS) seja usado como fallback.
-    const defaults = DEFAULT_SETTINGS[currentFuel];
+    // Combina padrões com dados salvos para garantir que todas as chaves existam
     const saved = allSettings[currentFuel] || {};
-    return { ...defaults, ...saved };
+    return { ...DEFAULT_SETTINGS[currentFuel], ...saved };
   }, [allSettings, currentFuel]);
 
-  // Valores numéricos das configurações atuais
-  const currentPrice = useMemo(()=> numeric(currentSettings.price), [currentSettings]);
-  const currentConsumption = useMemo(()=> numeric(currentSettings.consumption), [currentSettings]);
-  const currentTankSize = useMemo(()=> numeric(currentSettings.tankSize), [currentSettings]);
-  
-  // Valores numéricos dos inputs do formulário de registro
-  const amountNum = useMemo(() => numeric(amountBRL), [amountBRL]);
+  const currentPrice = currentSettings.price;
+  const currentConsumption = currentSettings.consumption;
+  const currentTankSize = currentSettings.tankSize;
+
+  /** Unidades dinâmicas (L ou m³) */
+  const { unitL, unitKmpl } = useMemo(() => ({
+    unitL: currentFuel === 'GNV' ? 'm³' : 'L',
+    unitKmpl: currentFuel === 'GNV' ? 'km/m³' : 'km/L',
+  }), [currentFuel]);
+
+  /** Números do formulário principal */
+  const amountBRLNum = useMemo(() => numeric(amountBRLInput), [amountBRLInput]);
   const litersNum = useMemo(() => numeric(litersInput), [litersInput]);
   const kmRodadosNum = useMemo(() => numeric(kmRodadosInput), [kmRodadosInput]);
 
-  // Valores numéricos dos inputs de simulação
+  /** Números das simulações */
   const simDistNum = useMemo(() => numeric(simulacaoDistanciaInput), [simulacaoDistanciaInput]);
   const simCommuteNum = useMemo(() => numeric(simulacaoCommuteInput), [simulacaoCommuteInput]);
-  
-  // Cálculo de autonomia imediata (para o card de registro)
-  const autonomyFromForm = useMemo(() => {
-    // Baseia-se em qual campo foi alterado por último
-    const litersToCalc = lastChanged === 'liters' ? litersNum : (amountNum / currentPrice);
-    return litersToCalc * currentConsumption;
-  }, [amountNum, litersNum, currentPrice, currentConsumption, lastChanged]);
 
-  // Cálculo de dias de autonomia (para o card de registro)
-  const daysAutonomy = useMemo(() => {
-    if (autonomyFromForm > 0 && simCommuteNum > 0) {
-      return autonomyFromForm / simCommuteNum;
-    }
-    return 0;
+  /** Cálculos em tempo real para o formulário de registro */
+  const autonomyFromForm = useMemo(() => {
+    const liters = litersNum > 0 ? litersNum : (amountBRLNum / currentPrice);
+    return liters * currentConsumption;
+  }, [litersNum, amountBRLNum, currentPrice, currentConsumption]);
+
+  const daysOfAutonomy = useMemo(() => {
+    if (autonomyFromForm === 0 || simCommuteNum === 0) return 0;
+    return autonomyFromForm / simCommuteNum;
   }, [autonomyFromForm, simCommuteNum]);
 
-  // Filtra o histórico para o combustível atual
+  const isOverTankLimit = useMemo(() => {
+    const liters = litersNum > 0 ? litersNum : (amountBRLNum / currentPrice);
+    return liters > 0 && liters > currentTankSize;
+  }, [litersNum, amountBRLNum, currentPrice, currentTankSize]);
+
+  /** Histórico filtrado pelo combustível atual */
   const filteredHistory = useMemo(() => {
     return history
-      .filter(r => r.fuelType === currentFuel)
+      .filter(h => h.fuelType === currentFuel)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [history, currentFuel]);
 
-  // Prepara dados para o gráfico
+  /** Dados para os gráficos */
   const chartData = useMemo(() => {
     return filteredHistory
       .slice() // Cria cópia
-      .reverse() // Reordena por data ascendente
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()) // Ordena por data
       .map(h => ({
-        // Formata data para o gráfico (ex: 05/11)
         date: new Date(h.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-        kmpl: (h.km > 0 && h.liters > 0) ? +(h.km / h.liters).toFixed(2) : null, // +(...) converte para número
-        price: +h.pricePerLiter.toFixed(2)
+        kmpl: h.liters > 0 ? +(h.km / h.liters).toFixed(2) : 0,
+        pricePerLiter: h.pricePerLiter
       }));
   }, [filteredHistory]);
 
-  // Estatísticas (Resumo Rápido)
+  /** Estatísticas do Resumo Rápido */
   const lastRefuel = useMemo(() => filteredHistory[0] || null, [filteredHistory]);
 
-  const avgKmpl = useMemo(() => {
+  const avgConsumption = useMemo(() => {
     const validEntries = filteredHistory.filter(h => h.km > 0 && h.liters > 0);
     if (validEntries.length === 0) return currentConsumption; // Retorna o da config se não houver histórico
     const totalKm = validEntries.reduce((sum, h) => sum + h.km, 0);
@@ -327,120 +465,81 @@ export default function FuelCalculatorPage() {
     return totalKm / totalLiters;
   }, [filteredHistory, currentConsumption]);
 
-  const avgPrice = useMemo(() => {
-    if (filteredHistory.length === 0) return currentPrice; // Retorna o da config
-    const totalSpent = filteredHistory.reduce((sum, h) => sum + h.amountBRL, 0);
-    const totalLiters = filteredHistory.reduce((sum, h) => sum + h.liters, 0);
-    if (totalLiters === 0) return currentPrice;
-    return totalSpent / totalLiters;
-  }, [filteredHistory, currentPrice]);
-
-  // Unidades de medida (L ou m³)
-  const unitL = currentFuel === 'GNV' ? 'm³' : 'L';
-  const unitKmpl = currentFuel === 'GNV' ? 'km/m³' : 'km/L';
-
-  // Verifica se o valor excede o tanque
-  const isOverTankLimit = useMemo(() => {
-    if (currentTankSize <= 0) return false;
-    return litersNum > currentTankSize;
-  }, [litersNum, currentTankSize]);
-
-  // --- Efeitos (useEffect) ---
-
-  // Cálculo bidirecional: R$ ↔ Litros (EM TEMPO REAL)
-  useEffect(() => {
-    // Se o usuário digitou em R$
-    if (lastChanged === 'brl') {
-      const val = numeric(amountBRL);
-      if (val === 0) {
-        setLitersInput(''); // Limpa se R$ for 0
-      } else if (currentPrice > 0) {
-        const l = val / currentPrice;
-        setLitersInput(fmtNum(l, 3)); // 3 casas decimais para litros
-      }
-    }
-  }, [amountBRL, currentPrice, lastChanged]);
-
-  // Se o usuário digitou em Litros
-  useEffect(() => {
-    if (lastChanged === 'liters') {
-      const l = numeric(litersInput);
-      if (l === 0) {
-        setAmountBRL(''); // Limpa se Litros for 0
-      } else {
-        const val = l * currentPrice;
-        setAmountBRL(fmtNum(val, 2));
-      }
-    }
-  }, [litersInput, currentPrice, lastChanged]);
-  
-
-  // Sincroniza os inputs de Configuração QUANDO O COMBUSTÍVEL MUDA
-  useEffect(() => {
-    const settings = currentSettings;
-    setPriceInput(fmtNum(settings.price, 2));
-    setConsumptionInput(fmtNum(settings.consumption, 2));
-    setTankSizeInput(fmtNum(settings.tankSize, 1));
-  }, [currentFuel]); // <-- CORREÇÃO: Dependência DEVE ser apenas [currentFuel]
+  const avgCostPerKm = useMemo(() => {
+    if (avgConsumption === 0) return 0;
+    return currentPrice / avgConsumption;
+  }, [currentPrice, avgConsumption]);
 
 
   // --- Handlers (Ações do Usuário) ---
 
-  /** Salva alteração nas Configurações (Preço, Consumo, Tanque) */
-  const handleSettingsChange = (field: 'price' | 'consumption' | 'tankSize', value: string) => {
+  /** Atualiza as configurações e salva no localStorage */
+  const handleSettingsChange = useCallback((field: 'price' | 'consumption' | 'tankSize', value: string) => {
     const numValue = numeric(value);
-    if (numValue <= 0) return; // Não salva valores inválidos
-
-    const newSettings: FuelSettings = {
-      ...currentSettings,
-      [field]: numValue,
-    };
+    if (numValue < 0) return; // Não permite valores negativos
 
     setAllSettings(prev => ({
       ...prev,
-      [currentFuel]: newSettings,
+      [currentFuel]: {
+        ...prev[currentFuel],
+        [field]: numValue
+      }
     }));
-  };
+  }, [currentFuel, setAllSettings]);
 
   /** Adiciona um novo registro ao histórico */
-  const handleAddRefuel = () => {
-    if (amountNum <= 0 || litersNum <= 0) {
-      alert("Por favor, preencha o Valor (R$) ou os Litros."); // TODO: Substituir por um modal
+  const addRefuel = useCallback(() => {
+    if (amountBRLNum <= 0 && litersNum <= 0) {
+      alert("Preencha o Valor (R$) ou os Litros.");
       return;
     }
 
-    // Calcula o preço por litro *real* deste abastecimento
-    const pricePerLiterActual = amountNum / litersNum;
+    let finalLiters = litersNum;
+    let finalAmountBRL = amountBRLNum;
+
+    if (litersNum > 0) {
+      finalAmountBRL = litersNum * currentPrice;
+    } else {
+      finalLiters = amountBRLNum / currentPrice;
+    }
+
+    if (finalLiters <= 0) return;
+
+    // Calcula o preço por litro real deste abastecimento
+    const pricePerLiterReal = finalAmountBRL / finalLiters;
 
     const newRefuel: Refuel = {
       id: uid(),
       date: new Date().toISOString(),
       fuelType: currentFuel,
-      amountBRL: amountNum,
-      liters: litersNum,
-      km: kmRodadosNum, // Pode ser 0 se não for informado
-      pricePerLiter: pricePerLiterActual,
+      amountBRL: +finalAmountBRL.toFixed(2),
+      liters: +finalLiters.toFixed(2),
+      km: kmRodadosNum,
+      pricePerLiter: +pricePerLiterReal.toFixed(2)
     };
 
     setHistory(prev => [newRefuel, ...prev]);
 
-    // Limpa os campos do formulário
-    setAmountBRL('');
+    // Limpa os campos
+    setAmountBRLInput('');
     setLitersInput('');
     setKmRodadosInput('');
-    setLastChanged(null);
-  };
+
+  }, [amountBRLNum, litersNum, kmRodadosNum, currentFuel, currentPrice, setHistory]);
 
   /** Remove um item do histórico */
-  const removeEntry = (id: string) => {
-    // TODO: Substituir por um modal de confirmação
+  const removeEntry = useCallback((id: string) => {
     if (confirm("Tem certeza que deseja remover este registro?")) {
       setHistory(prev => prev.filter(p => p.id !== id));
     }
-  };
+  }, [setHistory]);
 
-  /** Exporta o histórico (todos os combustíveis) como JSON */
-  const exportJSON = () => {
+  /** Exporta o histórico como JSON */
+  const exportJSON = useCallback(() => {
+    if (history.length === 0) {
+      alert("Histórico está vazio.");
+      return;
+    }
     try {
       const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -451,379 +550,455 @@ export default function FuelCalculatorPage() {
       URL.revokeObjectURL(url);
     } catch (e) {
       console.error("Erro ao exportar JSON:", e);
-      alert("Erro ao exportar JSON.");
+      alert("Erro ao exportar dados.");
     }
-  };
+  }, [history]);
 
-  /** Importa um arquivo JSON para o histórico */
-  const importJSON = (file: File | null) => {
+  /** Importa o histórico de um JSON */
+  const importJSON = useCallback((file: File | null) => {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result)) as Refuel[];
         // Validação simples
-        const validEntries = parsed.filter(p => p && p.id && p.date && p.fuelType && p.liters > 0);
+        const validEntries = parsed.filter(p => p && p.id && p.date && p.liters && p.fuelType);
         if (validEntries.length === 0) {
-          alert("Nenhum registro válido encontrado no arquivo.");
+          alert("Arquivo inválido ou não contém registros de combustível válidos.");
           return;
         }
-        // Evita duplicatas
+
+        // Evita duplicatas - Lógica movida para fora do setHistory
+        const existingIds = new Set(history.map(p => p.id));
+        const newEntries = validEntries.filter(p => !existingIds.has(p.id));
+
+        if (newEntries.length === 0) {
+          alert("Importação concluída, mas nenhum registro novo foi encontrado (registros duplicados).");
+          return;
+        }
+
         setHistory(prev => {
-          const prevIds = new Set(prev.map(r => r.id));
-          const newEntries = validEntries.filter(r => !prevIds.has(r.id));
-          return [...newEntries, ...prev];
+          return [...prev, ...newEntries];
         });
+
+        // Agora 'newEntries' está acessível
+        alert(`Importação concluída! ${newEntries.length} novos registros adicionados.`);
+
       } catch (e) {
         console.error("Erro ao importar JSON:", e);
         alert('Arquivo JSON inválido.');
       }
     };
     reader.readAsText(file);
-  };
+  }, [history, setHistory]); // Adiciona 'history' como dependência
 
 
-  // --- Renderização ---
+  // --- Effects (Efeitos Colaterais) ---
+
+  /** Sincroniza os inputs de Configuração ao trocar de combustível */
+  useEffect(() => {
+    setPriceInput(fmtNum(currentSettings.price));
+    setConsumptionInput(fmtNum(currentSettings.consumption, 1));
+    setTankSizeInput(fmtNum(currentSettings.tankSize, 1));
+  }, [currentFuel]); // Dependência crucial: APENAS quando troca de combustível
+
+  // Campo atualmente sendo editado (para evitar loop)
+  const [activeField, setActiveField] = useState<'amount' | 'liters' | null>(null);
+
+  // Atualiza "Litros" quando o usuário digita em "Valor (R$)"
+  useEffect(() => {
+    if (activeField === 'amount') {
+      const amount = numeric(amountBRLInput);
+      if (amount > 0 && currentPrice > 0) {
+        const l = amount / currentPrice;
+        setLitersInput(fmtNum(l));
+      } else {
+        setLitersInput('');
+      }
+    }
+  }, [amountBRLInput, currentPrice, activeField]);
+
+  // Atualiza "Valor (R$)" quando o usuário digita em "Litros"
+  useEffect(() => {
+    if (activeField === 'liters') {
+      const liters = numeric(litersInput);
+      if (liters > 0 && currentPrice > 0) {
+        const v = liters * currentPrice;
+        setAmountBRLInput(fmtNum(v));
+      } else {
+        setAmountBRLInput('');
+      }
+    }
+  }, [litersInput, currentPrice, activeField]);
+
+
+  // --- Renderização do Componente ---
 
   return (
-    <main className="min-h-screen p-4 md:p-8 font-inter bg-gray-50">
+    <main className="min-h-screen p-4 font-sans bg-gray-50 md:p-8">
+
+      {/* Container Principal */}
       <div className="max-w-6xl mx-auto">
-        
+
         {/* --- Cabeçalho --- */}
         <header className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
-              Calculadora de Combustível
-            </span>
+          <h1 className="text-3xl font-bold text-transparent md:text-4xl bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
+            Calculadora de Combustível
           </h1>
-          <p className="mt-2 text-lg text-gray-600">
-            Gerencie seus gastos e consumo (Etanol, Gasolina, Diesel, GNV).
+          <p className="mt-1 text-base text-slate-500">
+            Gerencie o consumo e os gastos do seu veículo.
           </p>
         </header>
 
-        {/* --- Abas de Combustível --- */}
-        <FuelTabs current={currentFuel} onChange={setCurrentFuel} />
+        {/* --- Abas de Combustível (Agora Responsivo) --- */}
+        <ResponsiveFuelSelector current={currentFuel} onChange={setCurrentFuel} />
 
         {/* --- Grid Principal (Layout) --- */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
 
-          {/* Coluna da Esquerda (Formulários) */}
-          <div className="flex flex-col col-span-1 gap-6">
+          {/* --- Coluna da Esquerda (Registros) --- */}
+          <div className="space-y-6 lg:col-span-2">
 
             {/* Card: Registrar Abastecimento */}
             <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
-              <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                <Plus className="w-5 h-5 mr-2 text-indigo-600" />
+              <h2 className="flex items-center mb-5 text-xl font-semibold text-gray-900">
+                <Fuel className="w-5 h-5 mr-2 text-indigo-600" />
                 Registrar Abastecimento
               </h2>
-              <div className="mt-4 space-y-4">
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <InputGroup
                   label={`Valor Total (R$)`}
                   icon={<DollarSign />}
-                  value={amountBRL}
-                  onChange={(e) => { setAmountBRL(e.target.value); setLastChanged('brl'); }}
-                  placeholder="ex: 100"
+                  value={amountBRLInput}
+                  onChange={(e) => {
+                    setActiveField('amount');
+                    setAmountBRLInput(e.target.value);
+                    if (!e.target.value) setLitersInput('');
+                  }}
+                  onBlur={() => setActiveField(null)} // libera sincronização
+                  placeholder="ex: 100,00"
                 />
+
                 <InputGroup
                   label={`Litros (${unitL})`}
-                  icon={<Fuel />}
+                  icon={<Droplet />}
                   value={litersInput}
-                  onChange={(e) => { setLitersInput(e.target.value); setLastChanged('liters'); }}
-                  placeholder="ex: 20"
+                  onChange={(e) => {
+                    setActiveField('liters');
+                    setLitersInput(e.target.value);
+                    if (!e.target.value) setAmountBRLInput('');
+                  }}
+                  onBlur={() => setActiveField(null)}
+                  placeholder="ex: 25,00"
                 />
-                
-                {/* CÁLCULOS IMEDIATOS (Aprimorado) */}
-                <div className="p-3 text-sm text-gray-700 bg-gray-100 rounded-lg">
-                  {lastChanged === 'brl' && amountNum > 0 && (
-                    <div>Litros Estimados: <strong className="text-gray-900">{fmtNum(litersNum, 3)} {unitL}</strong></div>
-                  )}
-                  {lastChanged === 'liters' && litersNum > 0 && (
-                    <div>Valor Estimado: <strong className="text-gray-900">{fmtBRL(amountNum)}</strong></div>
-                  )}
-                  {autonomyFromForm > 0 && (
-                    <div>Autonomia Estimada: <strong className="text-gray-900">{fmtNum(autonomyFromForm, 1)} km</strong></div>
-                  )}
-                  {daysAutonomy > 0 && (
-                    <div>Dias de Autonomia (Trajeto): <strong className="text-gray-900">{fmtNum(daysAutonomy, 1)} dias</strong></div>
-                  )}
-                  {(autonomyFromForm === 0 && daysAutonomy === 0) && (
-                    <span className="text-gray-500">Preencha R$ ou Litros para simular.</span>
-                  )}
-                </div>
+              </div>
 
-                {/* AVISO DE LIMITE DO TANQUE */}
-                {isOverTankLimit && (
-                  <div className="flex items-center p-3 text-sm text-yellow-800 bg-yellow-100 rounded-lg">
-                    <AlertTriangle className="w-5 h-5 mr-2" />
-                    <span>Aviso: Quantidade acima da capacidade do tanque ({fmtNum(currentTankSize, 1)} {unitL}).</span>
-                  </div>
-                )}
-
+              <div className="mt-4">
                 <InputGroup
-                  label="KM Rodados (Opcional)"
+                  label="Km Rodados (no tanque anterior)"
                   icon={<Route />}
                   value={kmRodadosInput}
                   onChange={(e) => setKmRodadosInput(e.target.value)}
                   placeholder="ex: 350"
+                  unit="km"
                 />
-                <button
-                  onClick={handleAddRefuel}
-                  disabled={amountNum <= 0 || litersNum <= 0}
-                  className="w-full py-3 font-semibold text-white transition-all duration-300 shadow-lg bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl hover:shadow-indigo-300/50 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 disabled:from-gray-400 disabled:to-gray-500 disabled:shadow-none disabled:cursor-not-allowed"
-                >
-                  Salvar Abastecimento
-                </button>
               </div>
+
+              {/* Informações em tempo real */}
+              {(amountBRLNum > 0 || litersNum > 0) && (
+                <div className="p-4 mt-4 space-y-1 text-indigo-800 rounded-xl bg-indigo-50">
+                  <div className="flex justify-between text-sm">
+                    <strong>Autonomia Estimada:</strong>
+                    <span className="font-bold">{fmtNum(autonomyFromForm, 1)} km</span>
+                  </div>
+                  {simCommuteNum > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <strong>Dias de Autonomia (Trajeto):</strong>
+                      <span className="font-bold">{fmtNum(daysOfAutonomy, 1)} dias</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Aviso de Limite do Tanque */}
+              {isOverTankLimit && (
+                <div className="flex items-center p-3 mt-4 text-sm text-red-700 rounded-xl bg-red-50">
+                  <Info className="flex-shrink-0 w-5 h-5 mr-2" />
+                  Atenção: A quantidade de litros excede a capacidade do tanque ({fmtNum(currentTankSize, 1)} {unitL}).
+                </div>
+              )}
+
+              <button
+                onClick={addRefuel}
+                disabled={amountBRLNum <= 0 && litersNum <= 0}
+                className="w-full py-3.5 mt-5 font-semibold text-white rounded-xl shadow-lg transition-all
+                          bg-gradient-to-r from-indigo-600 to-purple-600 
+                          hover:from-indigo-700 hover:to-purple-700
+                          focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2
+                          disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Salvar Registro
+              </button>
             </div>
 
-            {/* Card: Configurações */}
+            {/* Card: Histórico */}
             <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
-              <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                <Settings className="w-5 h-5 mr-2 text-indigo-600" />
-                Configurações ({currentFuel})
+              <h2 className="flex items-center mb-4 text-xl font-semibold text-gray-900">
+                <History className="w-5 h-5 mr-2 text-indigo-600" />
+                Histórico ({currentFuel})
               </h2>
-              <p className="mt-1 text-sm text-gray-500">Valores médios para este combustível. Salvo no seu navegador.</p>
-              <div className="mt-4 space-y-4">
-                <InputGroup
-                  label={`Preço por ${unitL} (R$)`}
-                  icon={<DollarSign />}
-                  value={priceInput} // Usa o estado de string
-                  onChange={(e) => {
-                    setPriceInput(e.target.value); // Apenas atualiza o string local
+
+              <div className="overflow-x-auto max-h-96">
+                {filteredHistory.length === 0 ? (
+                  <div className="py-4 text-sm text-center text-slate-500">Nenhum registro para este combustível.</div>
+                ) : (
+                  <table className="w-full text-sm table-auto">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="font-medium text-left text-slate-600">
+                        <th className="px-3 py-2">Data</th>
+                        <th className="px-3 py-2">R$</th>
+                        <th className="px-3 py-2">{unitL}</th>
+                        <th className="px-3 py-2">R$/{unitL}</th>
+                        <th className="px-3 py-2">Km</th>
+                        <th className="px-3 py-2">{unitKmpl}</th>
+                        <th className="px-3 py-2">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredHistory.map(h => (
+                        <tr key={h.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-3">{new Date(h.date).toLocaleDateString('pt-BR')}</td>
+                          <td className="px-3 py-3">{fmtBRL(h.amountBRL)}</td>
+                          <td className="px-3 py-3">{fmtNum(h.liters, 2)}</td>
+                          <td className="px-3 py-3">{fmtBRL(h.pricePerLiter)}</td>
+                          <td className="px-3 py-3">{fmtNum(h.km, 1)}</td>
+                          <td className="px-3 py-3 font-medium text-indigo-600">{h.liters > 0 ? fmtNum(h.km / h.liters, 1) : '—'}</td>
+                          <td className="px-3 py-3">
+                            <button onClick={() => removeEntry(h.id)} className="text-red-500 hover:text-red-700">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Botões de Import/Export */}
+              <div className="flex flex-wrap gap-3 pt-4 mt-5 border-t border-gray-100">
+                <button
+                  onClick={exportJSON}
+                  className="flex items-center justify-center px-4 py-2 text-sm font-medium text-white transition-colors bg-indigo-600 shadow-sm rounded-xl hover:bg-indigo-700"
+                >
+                  <Download className="w-4 h-4 mr-1.5" />
+                  Exportar
+                </button>
+                <label className="flex items-center justify-center px-4 py-2 text-sm font-medium text-indigo-600 transition-colors shadow-sm cursor-pointer bg-indigo-50 rounded-xl hover:bg-indigo-100">
+                  <Upload className="w-4 h-4 mr-1.5" />
+                  Importar
+                  <input
+                    type="file"
+                    accept="application/json"
+                    onChange={e => importJSON(e.target.files ? e.target.files[0] : null)}
+                    className="hidden"
+                    onClick={(e) => (e.currentTarget.value = '')} // Permite re-importar o mesmo arquivo
+                  />
+                </label>
+                <button
+                  onClick={() => {
+                    if (confirm("Deseja apagar TODO o histórico? Isso não pode ser desfeito.")) {
+                      setHistory([]);
+                    }
                   }}
-                  onBlur={() => {
-                    handleSettingsChange('price', priceInput); // Salva no onBlur
-                  }}
-                />
-                <InputGroup
-                  label={`Consumo Médio (${unitKmpl})`}
-                  icon={<Gauge />}
-                  value={consumptionInput} // Usa o estado de string
-                  onChange={(e) => {
-                    setConsumptionInput(e.target.value); // Apenas atualiza o string local
-                  }}
-                  onBlur={() => {
-                    handleSettingsChange('consumption', consumptionInput); // Salva no onBlur
-                  }}
-                />
-                <InputGroup
-                  label={`Capacidade do Tanque (${unitL})`}
-                  icon={<Container />} // Novo ícone
-                  value={tankSizeInput} // Novo estado de string
-                  onChange={(e) => {
-                    setTankSizeInput(e.target.value); // Apenas atualiza o string local
-                  }}
-                  onBlur={() => {
-                    handleSettingsChange('tankSize', tankSizeInput); // Salva no onBlur
-                  }}
-                />
+                  className="flex items-center justify-center px-4 py-2 ml-auto text-sm font-medium text-red-600 transition-colors shadow-sm bg-red-50 rounded-xl hover:bg-red-100"
+                >
+                  <Trash2 className="w-4 h-4 mr-1.5" />
+                  Limpar Tudo
+                </button>
+              </div>
+
+            </div>
+          </div>
+
+          {/* --- Coluna da Direita (Config & Simulações) --- */}
+          <div className="space-y-6">
+
+            {/* Card: Configurações (Agora abre o Modal) */}
+            <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
+              <div className="flex items-center justify-between">
+                <h2 className="flex items-center text-xl font-semibold text-gray-900">
+                  <Wrench className="w-5 h-5 mr-2 text-indigo-600" />
+                  Configurações
+                </h2>
+                <button
+                  onClick={() => setSettingsModalOpen(true)}
+                  className="flex items-center px-3 py-2 text-sm font-medium text-indigo-600 transition-colors bg-indigo-50 rounded-xl hover:bg-indigo-100"
+                >
+                  <Edit className="w-4 h-4 mr-1.5" />
+                  Editar ({currentFuel})
+                </button>
+              </div>
+
+              {/* Resumo das Configurações Atuais */}
+              <div className="mt-4 space-y-2 text-sm">
+                <div className="flex justify-between p-2.5 rounded-lg bg-gray-50">
+                  <span className="text-slate-600">Preço:</span>
+                  <span className="font-medium text-slate-900">{fmtBRL(currentPrice)} / {unitL}</span>
+                </div>
+                <div className="flex justify-between p-2.5 rounded-lg bg-gray-50">
+                  <span className="text-slate-600">Consumo:</span>
+                  <span className="font-medium text-slate-900">{fmtNum(currentConsumption, 1)} {unitKmpl}</span>
+                </div>
+                <div className="flex justify-between p-2.5 rounded-lg bg-gray-50">
+                  <span className="text-slate-600">Tanque:</span>
+                  <span className="font-medium text-slate-900">{fmtNum(currentTankSize, 1)} {unitL}</span>
+                </div>
               </div>
             </div>
 
             {/* Card: Simulações de Custo */}
             <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
-              <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                <Calendar className="w-5 h-5 mr-2 text-indigo-600" />
+              <h2 className="flex items-center mb-5 text-xl font-semibold text-gray-900">
+                <Calculator className="w-5 h-5 mr-2 text-indigo-600" />
                 Simulações de Custo
               </h2>
-              <div className="mt-4 space-y-4">
-                {/* Simulação de Viagem Única */}
-                <InputGroup
-                  label="Distância da Viagem (km)"
-                  icon={<Route />}
-                  value={simulacaoDistanciaInput}
-                  onChange={e => setSimulacaoDistanciaInput(e.target.value)}
-                  placeholder="ex: 150"
-                />
-                {(simDistNum > 0 && currentConsumption > 0) && (
-                  <div className="p-3 text-sm text-gray-700 bg-gray-100 rounded-lg">
-                    <div>Necessário: <strong className="text-gray-900">{fmtNum(simDistNum / currentConsumption, 2)} {unitL}</strong></div>
-                    <div>Custo: <strong className="text-gray-900">{fmtBRL((simDistNum / currentConsumption) * currentPrice)}</strong></div>
-                  </div>
-                )}
-                
-                {/* Simulação de Custo Diário/Recorrente */}
-                <InputGroup
-                  label="Deslocamento Diário (ida+volta km)"
-                  icon={<Calendar />}
-                  value={simulacaoCommuteInput}
-                  onChange={e => setSimulacaoCommuteInput(e.target.value)}
-                  placeholder="ex: 24"
-                />
-                {(simCommuteNum > 0 && currentConsumption > 0) && (
-                  <div className="p-3 text-sm text-gray-700 bg-gray-100 rounded-lg">
-                    <div>Consumo/dia: <strong className="text-gray-900">{fmtNum(simCommuteNum / currentConsumption, 2)} {unitL}</strong></div>
-                    <div>Custo/dia: <strong className="text-gray-900">{fmtBRL((simCommuteNum / currentConsumption) * currentPrice)}</strong></div>
-                  </div>
-                )}
+              <div className="space-y-4">
+                {/* Simulação por Distância */}
+                <div>
+                  <InputGroup
+                    label="Distância da Viagem"
+                    icon={<Route />}
+                    value={simulacaoDistanciaInput}
+                    onChange={(e) => setSimulacaoDistanciaInput(e.target.value)}
+                    placeholder="ex: 100"
+                    unit="km"
+                  />
+                  {simDistNum > 0 && (
+                    <div className="p-3 mt-2 text-sm rounded-lg bg-gray-50">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Litros:</span>
+                        <span className="font-medium text-slate-900">{fmtNum(simDistNum / currentConsumption, 2)} {unitL}</span>
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-slate-600">Custo:</span>
+                        <span className="font-medium text-slate-900">{fmtBRL((simDistNum / currentConsumption) * currentPrice)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Simulação de Trajeto Diário */}
+                <div>
+                  <InputGroup
+                    label="Deslocamento Diário"
+                    icon={<Clock />}
+                    value={simulacaoCommuteInput}
+                    onChange={(e) => setSimulacaoCommuteInput(e.target.value)}
+                    placeholder="ex: 24"
+                    unit="km"
+                  />
+                  {simCommuteNum > 0 && (
+                    <div className="p-3 mt-2 text-sm rounded-lg bg-gray-50">
+                      <div className="flex justify-between">
+                        <span className="text-slate-600">Custo/dia:</span>
+                        <span className="font-medium text-slate-900">{fmtBRL((simCommuteNum / currentConsumption) * currentPrice)}</span>
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-slate-600">Custo/mês:</span>
+                        <span className="font-medium text-slate-900">{fmtBRL((simCommuteNum / currentConsumption) * currentPrice * 30)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-
-          </div>
-
-          {/* Coluna da Direita (Dados) */}
-          <div className="flex flex-col col-span-1 gap-6 lg:col-span-2">
 
             {/* Card: Resumo Rápido */}
-            <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
+            <div className="p-6 space-y-4 bg-white border border-gray-100 shadow-2xl rounded-3xl">
               <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                <BarChart2 className="w-5 h-5 mr-2 text-indigo-600" />
-                Resumo Rápido ({currentFuel})
+                <TrendingUp className="w-5 h-5 mr-2 text-indigo-600" />
+                Resumo ({currentFuel})
               </h2>
-              <div className="grid grid-cols-1 gap-4 mt-4 md:grid-cols-2 lg:grid-cols-3">
-                <StatCard 
-                  title="Consumo Médio" 
-                  value={fmtNum(avgKmpl, 2)} 
-                  unit={unitKmpl} 
-                  icon={<Gauge />} 
-                />
-                <StatCard 
-                  title="Preço Médio" 
-                  value={fmtBRL(avgPrice)} 
-                  unit={`/${unitL}`} 
-                  icon={<DollarSign />} 
-                />
-                <StatCard 
-                  title="Custo por KM" 
-                  value={fmtBRL(avgPrice / avgKmpl)} 
-                  unit="/km" 
-                  icon={<Route />} 
-                />
-                {lastRefuel && (
-                  <>
-                    <StatCard 
-                      title="Último Abastecimento" 
-                      value={fmtBRL(lastRefuel.amountBRL)} 
-                      unit={`${fmtNum(lastRefuel.liters, 2)} ${unitL}`}
-                      icon={<Droplet />} 
-                    />
-                    {lastRefuel.km > 0 && (
-                       <StatCard 
-                        title="Último Consumo" 
-                        value={fmtNum(lastRefuel.km / lastRefuel.liters, 2)} 
-                        unit={unitKmpl}
-                        icon={<Gauge />} 
-                      />
-                    )}
-                  </>
-                )}
-              </div>
+              <StatCard
+                title="Consumo Médio (Histórico)"
+                value={fmtNum(avgConsumption, 1)}
+                unit={unitKmpl}
+                icon={<Gauge />}
+              />
+              <StatCard
+                title="Custo Médio por Km"
+                value={fmtBRL(avgCostPerKm)}
+                unit="(config. atual)"
+                icon={<Wallet />}
+              />
+              <StatCard
+                title="Último Abastecimento"
+                value={lastRefuel ? fmtBRL(lastRefuel.amountBRL) : '—'}
+                unit={lastRefuel ? `${fmtNum(lastRefuel.liters, 2)} ${unitL}` : ''}
+                icon={<Droplet />}
+              />
             </div>
-
-            {/* Card: Gráfico */}
-            <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
-              <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                <History className="w-5 h-5 mr-2 text-indigo-600" />
-                Gráfico de Consumo ({unitKmpl})
-              </h2>
-              {filteredHistory.length < 2 ? (
-                <div className="flex items-center justify-center h-64 text-gray-500">
-                  Adicione pelo menos 2 registros (com KM) para ver o gráfico.
-                </div>
-              ) : (
-                <div className="w-full h-64 mt-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                      <XAxis dataKey="date" stroke="#6b7280" />
-                      <YAxis domain={['dataMin - 1', 'dataMax + 1']} stroke="#6b7280" />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#fff', border: '1px solid #ddd', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
-                        labelFormatter={(label) => `Data: ${label}`}
-                        formatter={(value: number, name: string) => [
-                          fmtNum(value, 2) as any, // <-- CORREÇÃO AQUI
-                          name === 'kmpl' ? `Consumo (${unitKmpl})` : `Preço (${unitL})` // O nome
-                        ]}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="kmpl"
-                        stroke="#4f46e5"
-                        strokeWidth={2}
-                        dot={{ r: 4, fill: '#4f46e5' }}
-                        activeDot={{ r: 6 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-
-            {/* Card: Histórico */}
-            <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <h2 className="flex items-center text-xl font-semibold text-gray-900">
-                  <History className="w-5 h-5 mr-2 text-indigo-600" />
-                  Histórico ({currentFuel})
-                </h2>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={exportJSON}
-                    className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 transition-colors bg-white border shadow-sm border-gray-200/80 rounded-xl hover:bg-gray-50 hover:border-gray-300"
-                  >
-                    <Download className="w-4 h-4 mr-1.5" />
-                    Exportar JSON
-                  </button>
-                  <label className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 transition-colors bg-white border shadow-sm cursor-pointer border-gray-200/80 rounded-xl hover:bg-gray-50 hover:border-gray-300">
-                    <Upload className="w-4 h-4 mr-1.5" />
-                    Importar JSON
-                    <input type="file" accept="application/json" onChange={e => importJSON(e.target.files ? e.target.files[0] : null)} className="hidden" />
-                  </label>
-                </div>
-              </div>
-
-              {/* Tabela de Histórico */}
-              <div className="flow-root mt-4">
-                <div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
-                  <div className="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
-                    {filteredHistory.length === 0 ? (
-                      <div className="py-12 text-center text-gray-500">
-                        Nenhum registro para {currentFuel}.
-                      </div>
-                    ) : (
-                      <table className="min-w-full divide-y divide-gray-300">
-                        <thead>
-                          <tr className="text-left text-gray-600">
-                            <th scope="col" className="py-3.5 pl-4 pr-3 text-xs font-semibold uppercase tracking-wider text-gray-500 sm:pl-0">Data</th>
-                            <th scope="col" className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Valor (R$)</th>
-                            <th scope="col" className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Litros ({unitL})</th>
-                            <th scope="col" className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500">KM</th>
-                            <th scope="col" className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Consumo ({unitKmpl})</th>
-                            <th scope="col" className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Preço/L</th>
-                            <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-0"><span className="sr-only">Ações</span></th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                          {filteredHistory.map(h => (
-                            <tr key={h.id} className="hover:bg-gray-50">
-                              <td className="py-5 pl-4 pr-3 text-sm text-gray-700 whitespace-nowrap sm:pl-0">
-                                {new Date(h.date).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
-                              </td>
-                              <td className="px-3 py-5 text-sm text-gray-700 whitespace-nowrap">{fmtBRL(h.amountBRL)}</td>
-                              <td className="px-3 py-5 text-sm text-gray-700 whitespace-nowrap">{fmtNum(h.liters, 2)}</td>
-                              <td className="px-3 py-5 text-sm text-gray-700 whitespace-nowrap">{h.km > 0 ? fmtNum(h.km, 1) : '—'}</td>
-                              <td className="px-3 py-5 text-sm font-medium text-gray-900 whitespace-nowrap">
-                                {(h.km > 0 && h.liters > 0) ? fmtNum(h.km / h.liters, 2) : '—'}
-                              </td>
-                              <td className="px-3 py-5 text-sm text-gray-700 whitespace-nowrap">{fmtBRL(h.pricePerLiter)}</td>
-                              <td className="relative py-5 pl-3 pr-4 text-sm font-medium text-right whitespace-nowrap sm:pr-0">
-                                <button onClick={() => removeEntry(h.id)} className="text-red-600 hover:text-red-800">
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-            
           </div>
-        </div>
-        
+
+        </div> {/* End Grid Principal */}
+
+        {/* --- Seção do Gráfico --- */}
+        <section className="p-6 mt-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
+          <h2 className="flex items-center mb-5 text-xl font-semibold text-gray-900">
+            <TrendingUp className="w-5 h-5 mr-2 text-indigo-600" />
+            Evolução ({currentFuel})
+          </h2>
+          {chartData.length < 2 ? (
+            <div className="flex items-center justify-center h-64 text-sm text-center text-slate-500">
+              Adicione pelo menos dois registros de {currentFuel} com Km rodados para ver a evolução do consumo.
+            </div>
+          ) : (
+            <div className="w-full h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                  <XAxis dataKey="date" stroke="#6b7280" />
+                  <YAxis yAxisId="left" orientation="left" stroke="#4f46e5" label={{ value: unitKmpl, angle: -90, position: 'insideLeft', fill: '#4f46e5' }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#6d28d9" label={{ value: `R$/${unitL}`, angle: 90, position: 'insideRight', fill: '#6d28d9' }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', border: '1px solid #ddd', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                    labelFormatter={(label) => `Data: ${label}`}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'kmpl') {
+                        return [fmtNum(value, 2) as any, `Consumo (${unitKmpl})`];
+                      }
+                      if (name === 'pricePerLiter') {
+                        return [fmtBRL(value) as any, `Preço (${unitL})`];
+                      }
+                      return [value, name];
+                    }}
+                  />
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="kmpl"
+                    name="Consumo"
+                    stroke="#4f46e5"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#4f46e5' }}
+                    activeDot={{ r: 6 }}
+                  />
+                  <Bar
+                    yAxisId="right"
+                    dataKey="pricePerLiter"
+                    name="Preço"
+                    fill="#6d28d9"
+                    opacity={0.6}
+                    barSize={12}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </section>
+
         {/* --- Rodapé --- */}
         <footer className="mt-12 space-y-2 text-sm text-center text-slate-500">
           <p>
@@ -834,7 +1009,25 @@ export default function FuelCalculatorPage() {
             Otimize seus gastos com nosso app de cálculo de km por litro.
           </p>
         </footer>
-      </div>
+
+      </div> {/* End max-w-6xl container */}
+
+      {/* --- MODAL DE CONFIGURAÇÕES --- */}
+      {/* Renderiza o modal (controlado pelo estado isSettingsModalOpen) */}
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        currentFuel={currentFuel}
+        unitL={unitL}
+        unitKmpl={unitKmpl}
+        priceInput={priceInput}
+        setPriceInput={setPriceInput}
+        consumptionInput={consumptionInput}
+        setConsumptionInput={setConsumptionInput}
+        tankSizeInput={tankSizeInput}
+        setTankSizeInput={setTankSizeInput}
+        handleSettingsChange={handleSettingsChange}
+      />
     </main>
   );
 }
