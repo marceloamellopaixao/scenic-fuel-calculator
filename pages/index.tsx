@@ -56,15 +56,15 @@ type FuelSettings = {
 
 type AllSettings = Record<FuelType, FuelSettings>;
 
-const STORAGE_KEY_HISTORY = 'fuel_history_v2';
-const STORAGE_KEY_SETTINGS = 'fuel_settings_v2';
+const STORAGE_KEY_HISTORY = 'fuel_history';
+const STORAGE_KEY_SETTINGS = 'fuel_settings';
 
 // --- Configurações Padrão ---
 const DEFAULT_SETTINGS: AllSettings = {
-  'Etanol': { price: 4.09, consumption: 7.5, tankSize: 50 },
-  'Gasolina': { price: 5.89, consumption: 11.0, tankSize: 50 },
-  'Diesel': { price: 6.09, consumption: 14.0, tankSize: 70 },
-  'GNV': { price: 4.99, consumption: 13.0, tankSize: 15 },
+  'Etanol': { price: 0, consumption: 0, tankSize: 0 },
+  'Gasolina': { price: 0, consumption: 0, tankSize: 0 },
+  'Diesel': { price: 0, consumption: 0, tankSize: 0 },
+  'GNV': { price: 0, consumption: 0, tankSize: 0 },
 };
 
 // --- Funções Utilitárias ---
@@ -360,6 +360,79 @@ const SettingsModal = React.memo((
 });
 SettingsModal.displayName = 'SettingsModal';
 
+/** Modal de Histórico de Abastecimento */
+const HistoryModal = React.memo(
+  ({
+    isOpen,
+    onClose,
+    entry,
+  }: {
+    isOpen: boolean;
+    onClose: () => void;
+    entry: Refuel | null;
+  }) => {
+    if (!isOpen || !entry) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60 backdrop-blur-sm">
+        <div className="relative w-full max-w-md p-6 bg-white shadow-2xl rounded-3xl">
+          {/* Header */}
+          <div className="flex items-center justify-between pb-4 border-b border-gray-200">
+            <h2 className="flex items-center text-xl font-semibold text-gray-900">
+              <History className="w-5 h-5 mr-2 text-indigo-600" />
+              Detalhes do Abastecimento
+            </h2>
+            <button
+              onClick={onClose}
+              className="p-1 text-gray-400 transition-colors rounded-full hover:bg-gray-100 hover:text-gray-600"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          {/* Conteúdo */}
+          <div className="mt-6 space-y-3">
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Data:</span>
+              <span>{new Date(entry.date).toLocaleString('pt-BR')}</span>
+            </div>
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Combustível:</span>
+              <span>{entry.fuelType}</span>
+            </div>
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Valor Total:</span>
+              <span>{fmtBRL(entry.amountBRL)}</span>
+            </div>
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Litros:</span>
+              <span>{fmtNum(entry.liters)} L</span>
+            </div>
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Km Rodados:</span>
+              <span>{fmtNum(entry.km)} km</span>
+            </div>
+            <div className="flex justify-between text-sm text-slate-700">
+              <span className="font-medium">Preço por Litro:</span>
+              <span>{fmtBRL(entry.pricePerLiter)}</span>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="pt-4 mt-6 border-t border-gray-200">
+            <button
+              onClick={onClose}
+              className="w-full py-3 font-semibold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+);
+HistoryModal.displayName = "HistoryModal";
 
 // --- Componente Principal da Página ---
 
@@ -377,6 +450,7 @@ export default function FuelCalculatorPage() {
   const [simulacaoDistanciaInput, setSimulacaoDistanciaInput] = useState<string>('');
   const [simulacaoCommuteInput, setSimulacaoCommuteInput] = useState<string>('24'); // Default 24km
 
+
   // Histórico (vem do localStorage)
   const [history, setHistory] = useLocalStorage<Refuel[]>(STORAGE_KEY_HISTORY, []);
 
@@ -385,6 +459,10 @@ export default function FuelCalculatorPage() {
 
   // Estado para o modal de Configurações
   const [isSettingsModalOpen, setSettingsModalOpen] = useState(false);
+
+  // Estados do modal de histórico
+  const [isHistoryModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedEntry, setSelectedEntry] = useState<Refuel | null>(null);
 
   // Estados dos inputs de Configuração (para digitação livre sem perda de foco)
   const [priceInput, setPriceInput] = useState(fmtNum(allSettings[currentFuel].price));
@@ -509,7 +587,7 @@ export default function FuelCalculatorPage() {
     const pricePerLiterReal = finalAmountBRL / finalLiters;
 
     const newRefuel: Refuel = {
-      id: uid(),
+      id: String(uid()), // 🔹 Garante ID string
       date: new Date().toISOString(),
       fuelType: currentFuel,
       amountBRL: +finalAmountBRL.toFixed(2),
@@ -518,7 +596,12 @@ export default function FuelCalculatorPage() {
       pricePerLiter: +pricePerLiterReal.toFixed(2)
     };
 
-    setHistory(prev => [newRefuel, ...prev]);
+    // Atualiza histórico no estado e no localStorage
+    setHistory(prev => {
+      const updated = [newRefuel, ...prev];
+      localStorage.setItem('refuels', JSON.stringify(updated)); // 🔹 salva localmente
+      return updated;
+    });
 
     // Limpa os campos
     setAmountBRLInput('');
@@ -528,10 +611,12 @@ export default function FuelCalculatorPage() {
   }, [amountBRLNum, litersNum, kmRodadosNum, currentFuel, currentPrice, setHistory]);
 
   /** Remove um item do histórico */
-  const removeEntry = useCallback((id: string) => {
-    if (confirm("Tem certeza que deseja remover este registro?")) {
-      setHistory(prev => prev.filter(p => p.id !== id));
-    }
+  const removeEntry = useCallback((id: string | number) => {
+    setHistory(prev => {
+      const updated = prev.filter(p => String(p.id) !== String(id)); // 🔹 comparação segura
+      localStorage.setItem('refuels', JSON.stringify(updated)); // 🔹 atualiza localStorage
+      return updated;
+    });
   }, [setHistory]);
 
   /** Exporta o histórico como JSON */
@@ -742,40 +827,47 @@ export default function FuelCalculatorPage() {
               </button>
             </div>
 
-            {/* Card: Histórico */}
+            {/* Card: Histórico de Abastecimentos */}
             <div className="p-6 bg-white border border-gray-100 shadow-2xl rounded-3xl">
               <h2 className="flex items-center mb-4 text-xl font-semibold text-gray-900">
-                <History className="w-5 h-5 mr-2 text-indigo-600" />
-                Histórico ({currentFuel})
+                <Clock className="w-5 h-5 mr-2 text-indigo-600" />
+                Histórico
               </h2>
 
-              <div className="overflow-x-auto max-h-96">
-                {filteredHistory.length === 0 ? (
-                  <div className="py-4 text-sm text-center text-slate-500">Nenhum registro para este combustível.</div>
-                ) : (
-                  <table className="w-full text-sm table-auto">
-                    <thead className="sticky top-0 bg-white">
-                      <tr className="font-medium text-left text-slate-600">
-                        <th className="px-3 py-2">Data</th>
-                        <th className="px-3 py-2">R$</th>
-                        <th className="px-3 py-2">{unitL}</th>
-                        <th className="px-3 py-2">R$/{unitL}</th>
-                        <th className="px-3 py-2">Km</th>
-                        <th className="px-3 py-2">{unitKmpl}</th>
-                        <th className="px-3 py-2">Ação</th>
+              {filteredHistory.length === 0 ? (
+                <p className="text-sm text-gray-500">Nenhum registro encontrado.</p>
+              ) : (
+                <div className="overflow-hidden border border-gray-100 rounded-2xl">
+                  <table className="w-full text-sm text-left text-gray-700">
+                    <thead className="text-gray-500 bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2">Data</th>
+                        <th className="px-4 py-2">Valor</th>
+                        <th className="px-4 py-2 text-right">Ações</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {filteredHistory.map(h => (
-                        <tr key={h.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-3">{new Date(h.date).toLocaleDateString('pt-BR')}</td>
-                          <td className="px-3 py-3">{fmtBRL(h.amountBRL)}</td>
-                          <td className="px-3 py-3">{fmtNum(h.liters, 2)}</td>
-                          <td className="px-3 py-3">{fmtBRL(h.pricePerLiter)}</td>
-                          <td className="px-3 py-3">{fmtNum(h.km, 1)}</td>
-                          <td className="px-3 py-3 font-medium text-indigo-600">{h.liters > 0 ? fmtNum(h.km / h.liters, 1) : '—'}</td>
-                          <td className="px-3 py-3">
-                            <button onClick={() => removeEntry(h.id)} className="text-red-500 hover:text-red-700">
+                    <tbody>
+                      {filteredHistory.map((entry) => (
+                        <tr
+                          key={entry.id}
+                          className="transition-all border-t cursor-pointer hover:bg-indigo-50"
+                          onClick={() => {
+                            setSelectedEntry(entry);
+                            setHistoryModalOpen(true);
+                          }}
+                        >
+                          <td className="px-4 py-2">
+                            {new Date(entry.date).toLocaleDateString("pt-BR")}
+                          </td>
+                          <td className="px-4 py-2">{fmtBRL(entry.amountBRL)}</td>
+                          <td className="px-4 py-2 text-right">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeEntry(entry.id);
+                              }}
+                              className="p-1 text-red-500 transition-colors rounded-full hover:bg-red-50"
+                            >
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </td>
@@ -783,42 +875,8 @@ export default function FuelCalculatorPage() {
                       ))}
                     </tbody>
                   </table>
-                )}
-              </div>
-
-              {/* Botões de Import/Export */}
-              <div className="flex flex-wrap gap-3 pt-4 mt-5 border-t border-gray-100">
-                <button
-                  onClick={exportJSON}
-                  className="flex items-center justify-center px-4 py-2 text-sm font-medium text-white transition-colors bg-indigo-600 shadow-sm rounded-xl hover:bg-indigo-700"
-                >
-                  <Download className="w-4 h-4 mr-1.5" />
-                  Exportar
-                </button>
-                <label className="flex items-center justify-center px-4 py-2 text-sm font-medium text-indigo-600 transition-colors shadow-sm cursor-pointer bg-indigo-50 rounded-xl hover:bg-indigo-100">
-                  <Upload className="w-4 h-4 mr-1.5" />
-                  Importar
-                  <input
-                    type="file"
-                    accept="application/json"
-                    onChange={e => importJSON(e.target.files ? e.target.files[0] : null)}
-                    className="hidden"
-                    onClick={(e) => (e.currentTarget.value = '')} // Permite re-importar o mesmo arquivo
-                  />
-                </label>
-                <button
-                  onClick={() => {
-                    if (confirm("Deseja apagar TODO o histórico? Isso não pode ser desfeito.")) {
-                      setHistory([]);
-                    }
-                  }}
-                  className="flex items-center justify-center px-4 py-2 ml-auto text-sm font-medium text-red-600 transition-colors shadow-sm bg-red-50 rounded-xl hover:bg-red-100"
-                >
-                  <Trash2 className="w-4 h-4 mr-1.5" />
-                  Limpar Tudo
-                </button>
-              </div>
-
+                </div>
+              )}
             </div>
           </div>
 
@@ -1027,6 +1085,11 @@ export default function FuelCalculatorPage() {
         tankSizeInput={tankSizeInput}
         setTankSizeInput={setTankSizeInput}
         handleSettingsChange={handleSettingsChange}
+      />
+      <HistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setHistoryModalOpen(false)}
+        entry={selectedEntry}
       />
     </main>
   );
